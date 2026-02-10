@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Peter Note 1.0</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#111111">
+  <style>
+    :root{--bg:#0f1115;--card:#121722;--line:#222;--text:#e9eef7;--muted:#b8c4da;--red:#ff5c5c;--green:#39d98a}
+    body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:0;background:var(--bg);color:var(--text)}
+    header{padding:16px 18px;border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(15,17,21,.92);backdrop-filter:blur(8px);display:flex;gap:12px;align-items:center}
+    header img{width:28px;height:28px;border-radius:8px}
+    h1{margin:0;font-size:18px}
+    .small{font-size:12px;color:var(--muted);margin-top:4px}
+    main{padding:18px;max-width:760px;margin:0 auto}
+    .row{display:flex;gap:10px;margin:14px 0;flex-wrap:wrap}
+    input,button,textarea{border-radius:10px;border:1px solid #2a2f3a;background:#151a22;color:var(--text);padding:10px 12px;font-size:14px}
+    input{flex:1;min-width:220px}
+    button{cursor:pointer}
+    .tabs{display:flex;gap:10px;margin:10px 0}
+    .tab{border-radius:999px;padding:8px 12px;border:1px solid #2a2f3a;background:transparent;color:var(--muted)}
+    .tab.active{background:#151a22;color:var(--text)}
+    ul{list-style:none;padding:0;margin:10px 0}
+    li{display:flex;align-items:flex-start;gap:10px;padding:12px;border:1px solid var(--line);border-radius:12px;margin-bottom:10px;background:var(--card)}
+    .badge{width:10px;height:10px;border-radius:50%;margin-top:6px;flex:0 0 auto}
+    .badge.open{background:var(--red)}
+    .badge.done{background:var(--green)}
+    .title{flex:1;min-width:0}
+    .title strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .title .sub{color:var(--muted);font-size:12px;margin-top:3px}
+    .actions{display:flex;gap:8px;flex:0 0 auto}
+    .ghost{background:transparent}
+    .danger{border-color:#5a2a2a;color:#ffb4b4}
+    .pill{font-size:12px;padding:3px 8px;border-radius:999px;border:1px solid #2a2f3a;color:var(--muted)}
+    dialog{width:min(720px,92vw);border:1px solid #2a2f3a;border-radius:14px;background:#0f141d;color:var(--text);padding:0}
+    dialog::backdrop{background:rgba(0,0,0,.55)}
+    .dlgHead{padding:14px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center}
+    .dlgHead .sp{flex:1}
+    .dlgBody{padding:14px}
+    textarea{width:100%;min-height:180px;resize:vertical}
+    .dlgFoot{padding:14px;border-top:1px solid var(--line);display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap}
+    .hint{color:var(--muted);font-size:12px;margin-top:8px}
+  </style>
+</head>
+<body>
+<header>
+  <img src="icon-192.png" alt="Icon">
+  <div>
+    <h1>Peter Note 1.0</h1>
+    <div class="small" id="todayLine"></div>
+  </div>
+</header>
+
+<main>
+  <div class="tabs">
+    <button id="tabTodo" class="tab active">To-Do</button>
+    <button id="tabArchive" class="tab">Archiv</button>
+  </div>
+
+  <div class="row" id="searchRow">
+    <input id="search" placeholder="Suchen in Aufgaben & Notizen…" autocomplete="off" />
+    <button id="clearSearch" class="ghost">×</button>
+  </div>
+
+  <div class="row" id="addRow">
+    <input id="text" placeholder="Neue Aufgabe… z.B. VPI Schulung planen" autocomplete="off" />
+    <button id="add">Hinzufügen</button>
+  </div>
+
+  <ul id="list"></ul>
+
+  <div class="row">
+    <button id="exportBtn">Backup exportieren</button>
+    <button id="importBtn">Backup importieren</button>
+    <input id="importFile" type="file" accept="application/json" hidden />
+  </div>
+  <div class="small">Offen = rot (To-Do). Erledigt = grün (Archiv). Klick = Notizen. Suche findet auch Text in Notizen.</div>
+</main>
+
+<dialog id="dlg">
+  <div class="dlgHead">
+    <span id="dlgStatus" class="pill"></span>
+    <div class="sp">
+      <div id="dlgTitle" style="font-weight:700"></div>
+      <div class="small" id="dlgCreated"></div>
+    </div>
+    <button id="dlgClose" class="ghost">Schliessen</button>
+  </div>
+  <div class="dlgBody">
+    <label class="small">Notizen (freier Text)</label>
+    <textarea id="dlgNotes" placeholder="Hier kannst du alles reinschreiben…"></textarea>
+    <div class="hint">„Notiz-Zeile hinzufügen“ setzt automatisch Datum+Uhrzeit davor.</div>
+  </div>
+  <div class="dlgFoot">
+    <button id="appendLine" class="ghost">Notiz-Zeile hinzufügen</button>
+    <button id="toggleDone"></button>
+    <button id="deleteTask" class="danger">Löschen</button>
+    <button id="saveTask">Speichern</button>
+  </div>
+</dialog>
+
+<script>
+const LS_KEY = "peter_note_v1";
+
+const pad2 = n => String(n).padStart(2,"0");
+function fmtDate(d=new Date()){ return `${pad2(d.getDate())}.${pad2(d.getMonth()+1)}.${String(d.getFullYear()).slice(-2)}`; }
+function fmtDateTime(d=new Date()){ return `${fmtDate(d)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; }
+document.getElementById("todayLine").textContent = "Heute: " + fmtDate(new Date());
+
+function load(){
+  try { return JSON.parse(localStorage.getItem(LS_KEY)) || { items:[], view:"todo", q:"" }; }
+  catch { return { items:[], view:"todo", q:"" }; }
+}
+function save(db){ localStorage.setItem(LS_KEY, JSON.stringify(db)); }
+
+function sortItems(items){ return [...items].sort((a,b)=> new Date(b.createdAt) - new Date(a.createdAt)); }
+
+function addTask(text){
+  const db = load();
+  const now = new Date();
+  db.items.unshift({
+    id: crypto.randomUUID(),
+    titleRaw: text.trim(),
+    createdAt: now.toISOString(),
+    createdLabel: fmtDate(now),
+    done: false,
+    doneAt: null,
+    notes: ""
+  });
+  save(db);
+}
+
+function updateTask(id, patch){
+  const db = load();
+  const it = db.items.find(x => x.id === id);
+  if(!it) return;
+  Object.assign(it, patch);
+  save(db);
+}
+
+function removeTask(id){
+  const db = load();
+  db.items = db.items.filter(x => x.id !== id);
+  save(db);
+}
+
+function setView(v){
+  const db = load();
+  db.view = v; save(db);
+}
+
+function setQuery(q){
+  const db = load();
+  db.q = q; save(db);
+}
+
+function matchesQuery(it, q){
+  if(!q) return true;
+  q = q.toLowerCase();
+  const hay = `${it.createdLabel} ${it.titleRaw}\n${it.notes||""}`.toLowerCase();
+  return hay.includes(q);
+}
+
+function filtered(db){
+  const isArchive = db.view === "archive";
+  let items = db.items.filter(x => isArchive ? x.done : !x.done);
+  items = items.filter(it => matchesQuery(it, (db.q||"").trim()));
+  return sortItems(items);
+}
+
+const listEl = document.getElementById("list");
+const dlg = document.getElementById("dlg");
+let activeId = null;
+
+function openDialog(item){
+  activeId = item.id;
+  document.getElementById("dlgTitle").textContent = `${item.createdLabel} ${item.titleRaw}`;
+  document.getElementById("dlgCreated").textContent = "Erstellt: " + fmtDateTime(new Date(item.createdAt));
+  document.getElementById("dlgNotes").value = item.notes || "";
+  document.getElementById("dlgStatus").textContent = item.done ? "erledigt (Archiv)" : "offen (To-Do)";
+  document.getElementById("toggleDone").textContent = item.done ? "Zurück zu To-Do" : "Als erledigt ins Archiv";
+  dlg.showModal();
+}
+
+function render(){
+  const db = load();
+
+  // Tabs
+  const todoOn = db.view !== "archive";
+  document.getElementById("tabTodo").classList.toggle("active", todoOn);
+  document.getElementById("tabArchive").classList.toggle("active", !todoOn);
+
+  // Add row only in To-Do
+  document.getElementById("addRow").style.display = todoOn ? "flex" : "none";
+
+  // Search state
+  const s = document.getElementById("search");
+  if(s.value !== (db.q||"")) s.value = db.q || "";
+
+  listEl.innerHTML = "";
+  const items = filtered(db);
+
+  items.forEach(it => {
+    const li = document.createElement("li");
+
+    const badge = document.createElement("div");
+    badge.className = "badge " + (it.done ? "done" : "open");
+
+    const title = document.createElement("div");
+    title.className = "title";
+
+    const main = document.createElement("strong");
+    main.textContent = `${it.createdLabel} ${it.titleRaw}`;
+
+    const sub = document.createElement("div");
+    sub.className = "sub";
+    const noteLines = (it.notes || "").trim() ? it.notes.trim().split("\n").length : 0;
+    const statusLine = it.done ? ("Erledigt: " + (it.doneAt ? fmtDateTime(new Date(it.doneAt)) : "—")) : "Offen";
+    sub.textContent = `${statusLine} • ${noteLines ? noteLines+" Notizzeile(n)" : "keine Notizen"}`;
+
+    title.appendChild(main);
+    title.appendChild(sub);
+
+    const actions = document.createElement("div");
+    actions.className = "actions";
+
+    const quick = document.createElement("button");
+    quick.className = "ghost";
+    quick.textContent = it.done ? "↺" : "✓";
+    quick.title = it.done ? "Zurück zu To-Do" : "Ins Archiv";
+    quick.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if(it.done){
+        updateTask(it.id, { done:false, doneAt:null });
+      } else {
+        updateTask(it.id, { done:true, doneAt:new Date().toISOString() });
+      }
+      render();
+    });
+
+    const del = document.createElement("button");
+    del.className = "ghost danger";
+    del.textContent = "✕";
+    del.title = "Löschen";
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      removeTask(it.id);
+      render();
+    });
+
+    actions.appendChild(quick);
+    actions.appendChild(del);
+
+    li.appendChild(badge);
+    li.appendChild(title);
+    li.appendChild(actions);
+    li.addEventListener("click", () => openDialog(it));
+    listEl.appendChild(li);
+  });
+}
+
+document.getElementById("tabTodo").addEventListener("click", ()=>{ setView("todo"); render(); });
+document.getElementById("tabArchive").addEventListener("click", ()=>{ setView("archive"); render(); });
+
+document.getElementById("add").addEventListener("click", () => {
+  const text = document.getElementById("text");
+  if(!text.value.trim()) return;
+  addTask(text.value);
+  text.value = "";
+  render();
+});
+document.getElementById("text").addEventListener("keydown", (e) => {
+  if(e.key === "Enter") document.getElementById("add").click();
+});
+
+document.getElementById("search").addEventListener("input", (e)=>{ setQuery(e.target.value); render(); });
+document.getElementById("clearSearch").addEventListener("click", ()=>{ setQuery(""); render(); });
+
+document.getElementById("dlgClose").addEventListener("click", () => dlg.close());
+
+document.getElementById("saveTask").addEventListener("click", () => {
+  if(!activeId) return;
+  updateTask(activeId, { notes: document.getElementById("dlgNotes").value });
+  dlg.close(); render();
+});
+
+document.getElementById("appendLine").addEventListener("click", () => {
+  const ta = document.getElementById("dlgNotes");
+  const prefix = fmtDateTime(new Date()) + " ";
+  if(ta.value && !ta.value.endsWith("\n")) ta.value += "\n";
+  ta.value += prefix;
+  ta.focus();
+  ta.selectionStart = ta.selectionEnd = ta.value.length;
+});
+
+document.getElementById("toggleDone").addEventListener("click", () => {
+  if(!activeId) return;
+  const db = load();
+  const it = db.items.find(x => x.id === activeId);
+  if(!it) return;
+  it.notes = document.getElementById("dlgNotes").value;
+
+  if(it.done){
+    it.done = false; it.doneAt = null;
+  } else {
+    it.done = true; it.doneAt = new Date().toISOString();
+  }
+  save(db);
+
+  dlg.close();
+  render();
+});
+
+document.getElementById("deleteTask").addEventListener("click", () => {
+  if(!activeId) return;
+  removeTask(activeId);
+  activeId = null;
+  dlg.close(); render();
+});
+
+// Backup export/import
+document.getElementById("exportBtn").addEventListener("click", () => {
+  const db = load();
+  const payload = { exportedAt:new Date().toISOString(), app:"peter_note", version:1, data:db };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {type:"application/json"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `peter_note_backup_${fmtDate(new Date()).replaceAll(".","-")}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+document.getElementById("importBtn").addEventListener("click", () => {
+  document.getElementById("importFile").value = "";
+  document.getElementById("importFile").click();
+});
+document.getElementById("importFile").addEventListener("change", async (e) => {
+  const file = e.target.files?.[0];
+  if(!file) return;
+  const txt = await file.text();
+  let parsed;
+  try { parsed = JSON.parse(txt); } catch { alert("Import fehlgeschlagen: ungültiges JSON."); return; }
+
+  const db = parsed?.data?.items ? parsed.data : (parsed?.items ? parsed : null);
+  if(!db || !Array.isArray(db.items)){ alert("Import fehlgeschlagen: Struktur nicht erkannt."); return; }
+
+  db.view = db.view || "todo";
+  db.q = db.q || "";
+  db.items = db.items.map(it => ({
+    id: it.id || crypto.randomUUID(),
+    titleRaw: it.titleRaw || it.title || "",
+    createdAt: it.createdAt || new Date().toISOString(),
+    createdLabel: it.createdLabel || fmtDate(new Date(it.createdAt || Date.now())),
+    done: !!it.done,
+    doneAt: it.doneAt || null,
+    notes: it.notes || ""
+  }));
+
+  localStorage.setItem(LS_KEY, JSON.stringify(db));
+  render();
+  alert("Import ok.");
+});
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("./sw.js").catch(()=>{});
+}
+render();
+</script>
+</body>
+</html>
