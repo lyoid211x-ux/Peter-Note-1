@@ -58,7 +58,6 @@
     .title{flex:1;min-width:0}
     .title strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .title .sub{color:var(--muted);font-size:12px;margin-top:3px}
-
     .pill{font-size:12px;padding:3px 9px;border-radius:999px;border:1px solid var(--ring);color:var(--muted)}
 
     dialog{
@@ -69,15 +68,31 @@
     .dlgHead{padding:14px 14px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center}
     .dlgHead .sp{flex:1;min-width:0}
     .dlgBody{padding:14px}
-    textarea{width:100%;min-height:200px;resize:vertical}
+    textarea{width:100%;min-height:180px;resize:vertical}
     .dlgFoot{padding:14px;border-top:1px solid var(--line);display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap}
     .hint{color:var(--muted);font-size:12px;margin-top:8px}
 
     .confirmBox{
-      padding:12px;border:1px solid var(--ring);background:rgba(21,26,34,.65);border-radius:12px;margin-top:10px
+      padding:12px;border:1px solid var(--ring);background:rgba(21,26,34,.65);border-radius:12px;margin-top:12px
     }
     .confirmRow{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center}
     .confirmRow input{flex:0 0 220px; min-width:220px}
+
+    /* images */
+    .imgBar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:14px 0 10px}
+    .gallery{display:flex;gap:10px;flex-wrap:wrap}
+    .thumb{
+      width:88px;height:88px;border-radius:14px;border:1px solid var(--ring);
+      background:#0b0e13; overflow:hidden; position:relative;
+      box-shadow:0 10px 24px rgba(0,0,0,.28)
+    }
+    .thumb img{width:100%;height:100%;object-fit:cover;display:block}
+    .thumb button{
+      position:absolute;top:6px;right:6px;
+      padding:6px 8px;border-radius:10px;border:1px solid #5a2a2a;background:rgba(15,17,21,.75);color:#ffb4b4
+    }
+    .imgInfo{font-size:12px;color:var(--muted)}
+    .fullImg{max-width:92vw;max-height:82vh;display:block;margin:0 auto}
   </style>
 </head>
 <body>
@@ -96,7 +111,7 @@
   </div>
 
   <div class="row">
-    <input id="search" placeholder="Suchen in Aufgaben & Notizen…" autocomplete="off" />
+    <input id="search" placeholder="Suchen in Aufgaben, Notizen & Bildern…" autocomplete="off" />
     <button id="clearSearch" class="ghost" title="Suche löschen">×</button>
   </div>
 
@@ -115,6 +130,7 @@
   <div class="small">Tippen auf Eintrag öffnet Details. Erledigen/Löschen nur dort (mit Bestätigung).</div>
 </main>
 
+<!-- Main dialog -->
 <dialog id="dlg">
   <div class="dlgHead">
     <span id="dlgStatus" class="pill"></span>
@@ -126,7 +142,19 @@
   </div>
 
   <div class="dlgBody">
-    <label class="small">Notizen (freier Text)</label>
+    <div class="imgBar">
+      <button id="addPhoto" class="ghost">📷 Foto</button>
+      <button id="addImage" class="ghost">🖼 Bild</button>
+      <span class="imgInfo" id="imgInfo"></span>
+
+      <!-- hidden inputs -->
+      <input id="pickImage" type="file" accept="image/*" hidden />
+      <input id="takePhoto" type="file" accept="image/*" capture="environment" hidden />
+    </div>
+
+    <div class="gallery" id="gallery"></div>
+
+    <label class="small" style="display:block;margin-top:14px">Notizen (freier Text)</label>
     <textarea id="dlgNotes" placeholder="Hier kannst du alles reinschreiben…"></textarea>
     <div class="hint">„Notiz-Zeile hinzufügen“ setzt automatisch Datum+Uhrzeit davor.</div>
 
@@ -150,8 +178,20 @@
   </div>
 </dialog>
 
+<!-- Image preview dialog -->
+<dialog id="imgDlg">
+  <div class="dlgHead">
+    <div class="sp"><div style="font-weight:700">Bildvorschau</div></div>
+    <button id="imgClose" class="ghost">Schliessen</button>
+  </div>
+  <div class="dlgBody">
+    <img id="imgPreview" class="fullImg" alt="Vorschau">
+  </div>
+</dialog>
+
 <script>
-const LS_KEY = "peter_note_v1";
+const LS_KEY = "peter_note_v2"; // neue Version, damit wir sauber erweitern
+
 const pad2 = n => String(n).padStart(2,"0");
 function fmtDate(d=new Date()){ return `${pad2(d.getDate())}.${pad2(d.getMonth()+1)}.${String(d.getFullYear()).slice(-2)}`; }
 function fmtDateTime(d=new Date()){ return `${fmtDate(d)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; }
@@ -164,55 +204,115 @@ function load(){
 function save(db){ localStorage.setItem(LS_KEY, JSON.stringify(db)); }
 function sortItems(items){ return [...items].sort((a,b)=> new Date(b.createdAt) - new Date(a.createdAt)); }
 
+function normalizeItem(it){
+  it.images = Array.isArray(it.images) ? it.images : [];
+  it.notes = it.notes || "";
+  it.doneAt = it.doneAt || null;
+  it.createdLabel = it.createdLabel || fmtDate(new Date(it.createdAt || Date.now()));
+  return it;
+}
+
 function addTask(text){
   const db = load();
   const now = new Date();
-  db.items.unshift({
+  db.items.unshift(normalizeItem({
     id: crypto.randomUUID(),
     titleRaw: text.trim(),
     createdAt: now.toISOString(),
     createdLabel: fmtDate(now),
     done: false,
     doneAt: null,
-    notes: ""
-  });
+    notes: "",
+    images: []
+  }));
   save(db);
 }
-function updateTask(id, confirmPatch){
+
+function updateTask(id, patch){
   const db = load();
   const it = db.items.find(x => x.id === id);
   if(!it) return;
-  Object.assign(it, confirmPatch);
+  Object.assign(it, patch);
+  normalizeItem(it);
   save(db);
 }
+
 function removeTask(id){
   const db = load();
   db.items = db.items.filter(x => x.id !== id);
   save(db);
 }
-function setView(v){
-  const db = load(); db.view = v; save(db);
-}
-function setQuery(q){
-  const db = load(); db.q = q; save(db);
-}
+
+function setView(v){ const db = load(); db.view = v; save(db); }
+function setQuery(q){ const db = load(); db.q = q; save(db); }
+
 function matchesQuery(it, q){
   if(!q) return true;
   q = q.toLowerCase();
-  const hay = `${it.createdLabel} ${it.titleRaw}\n${it.notes||""}`.toLowerCase();
+  const imgNames = (it.images||[]).map(x => x.name || "").join(" ");
+  const hay = `${it.createdLabel} ${it.titleRaw}\n${it.notes||""}\n${imgNames}`.toLowerCase();
   return hay.includes(q);
 }
+
 function filtered(db){
   const isArchive = db.view === "archive";
+  db.items = db.items.map(normalizeItem);
   let items = db.items.filter(x => isArchive ? x.done : !x.done);
   items = items.filter(it => matchesQuery(it, (db.q||"").trim()));
   return sortItems(items);
 }
 
-// UI
+// ---------- image helpers (resize + compress) ----------
+async function fileToCompressedDataUrl(file, maxSide=1280, quality=0.8){
+  const img = await new Promise((res, rej) => {
+    const i = new Image();
+    i.onload = () => res(i);
+    i.onerror = rej;
+    i.src = URL.createObjectURL(file);
+  });
+
+  const w = img.naturalWidth || img.width;
+  const h = img.naturalHeight || img.height;
+
+  let nw = w, nh = h;
+  const scale = Math.min(1, maxSide / Math.max(w, h));
+  nw = Math.round(w * scale);
+  nh = Math.round(h * scale);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = nw; canvas.height = nh;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0, nw, nh);
+  URL.revokeObjectURL(img.src);
+
+  // JPEG is usually smaller; keep it simple:
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+function bytesApproxFromDataUrl(dataUrl){
+  // base64 size approx
+  const base64 = dataUrl.split(",")[1] || "";
+  return Math.floor(base64.length * 0.75);
+}
+
+function formatBytes(n){
+  if(n < 1024) return n + " B";
+  if(n < 1024*1024) return (n/1024).toFixed(1) + " KB";
+  return (n/(1024*1024)).toFixed(2) + " MB";
+}
+
+// ---------- UI ----------
 const listEl = document.getElementById("list");
 const dlg = document.getElementById("dlg");
+const imgDlg = document.getElementById("imgDlg");
 let activeId = null;
+
+function getActiveItem(){
+  const db = load();
+  const it = db.items.find(x => x.id === activeId);
+  if(!it) return null;
+  return normalizeItem(it);
+}
 
 function openDialog(item){
   activeId = item.id;
@@ -222,7 +322,50 @@ function openDialog(item){
   document.getElementById("dlgStatus").textContent = item.done ? "erledigt (Archiv)" : "offen (To-Do)";
   document.getElementById("toggleDone").textContent = item.done ? "Zurück zu To-Do" : "Als erledigt ins Archiv";
   document.getElementById("deleteConfirm").value = "";
+  renderGallery(item);
   dlg.showModal();
+}
+
+function renderGallery(item){
+  const g = document.getElementById("gallery");
+  const info = document.getElementById("imgInfo");
+  g.innerHTML = "";
+
+  const imgs = item.images || [];
+  let total = 0;
+  imgs.forEach(x => total += bytesApproxFromDataUrl(x.dataUrl || ""));
+  info.textContent = imgs.length ? `${imgs.length} Bild(er) • ca. ${formatBytes(total)}` : "Keine Bilder";
+
+  imgs.forEach((imgObj) => {
+    const d = document.createElement("div");
+    d.className = "thumb";
+
+    const im = document.createElement("img");
+    im.src = imgObj.dataUrl;
+    im.alt = imgObj.name || "Bild";
+    im.addEventListener("click", (e) => {
+      e.stopPropagation();
+      document.getElementById("imgPreview").src = imgObj.dataUrl;
+      imgDlg.showModal();
+    });
+
+    const del = document.createElement("button");
+    del.textContent = "✕";
+    del.title = "Bild löschen";
+    del.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if(!confirm("Dieses Bild wirklich löschen?")) return;
+      const it = getActiveItem();
+      if(!it) return;
+      it.images = (it.images || []).filter(x => x.id !== imgObj.id);
+      updateTask(it.id, { images: it.images });
+      renderGallery(getActiveItem());
+    });
+
+    d.appendChild(im);
+    d.appendChild(del);
+    g.appendChild(d);
+  });
 }
 
 function render(){
@@ -240,23 +383,20 @@ function render(){
 
   items.forEach(it => {
     const li = document.createElement("li");
-
     const badge = document.createElement("div");
     badge.className = "badge " + (it.done ? "done" : "open");
 
     const title = document.createElement("div");
     title.className = "title";
-
     const main = document.createElement("strong");
     main.textContent = `${it.createdLabel} ${it.titleRaw}`;
 
     const sub = document.createElement("div");
     sub.className = "sub";
     const noteLines = (it.notes || "").trim() ? it.notes.trim().split("\n").length : 0;
-    const statusLine = it.done
-      ? ("Erledigt: " + (it.doneAt ? fmtDateTime(new Date(it.doneAt)) : "—"))
-      : "Offen";
-    sub.textContent = `${statusLine} • ${noteLines ? noteLines+" Notizzeile(n)" : "keine Notizen"}`;
+    const imgCount = (it.images || []).length;
+    const statusLine = it.done ? ("Erledigt: " + (it.doneAt ? fmtDateTime(new Date(it.doneAt)) : "—")) : "Offen";
+    sub.textContent = `${statusLine} • ${noteLines ? noteLines+" Notizzeile(n)" : "keine Notizen"} • ${imgCount ? imgCount+" Bild(er)" : "keine Bilder"}`;
 
     title.appendChild(main);
     title.appendChild(sub);
@@ -264,7 +404,6 @@ function render(){
     li.appendChild(badge);
     li.appendChild(title);
     li.addEventListener("click", () => openDialog(it));
-
     listEl.appendChild(li);
   });
 }
@@ -289,9 +428,11 @@ document.getElementById("text").addEventListener("keydown", (e) => {
 document.getElementById("search").addEventListener("input", (e)=>{ setQuery(e.target.value); render(); });
 document.getElementById("clearSearch").addEventListener("click", ()=>{ setQuery(""); render(); });
 
-// Dialog actions
+// Dialog close
 document.getElementById("dlgClose").addEventListener("click", () => dlg.close());
+document.getElementById("imgClose").addEventListener("click", () => imgDlg.close());
 
+// Save notes
 document.getElementById("saveTask").addEventListener("click", () => {
   if(!activeId) return;
   updateTask(activeId, { notes: document.getElementById("dlgNotes").value });
@@ -307,52 +448,74 @@ document.getElementById("appendLine").addEventListener("click", () => {
   ta.selectionStart = ta.selectionEnd = ta.value.length;
 });
 
+// Done / undo
 document.getElementById("toggleDone").addEventListener("click", () => {
   if(!activeId) return;
   const db = load();
   const it = db.items.find(x => x.id === activeId);
   if(!it) return;
-
-  // notizen vor der Aktion sichern
+  normalizeItem(it);
   it.notes = document.getElementById("dlgNotes").value;
 
   const goingDone = !it.done;
   const msg = goingDone
     ? "Diese Aufgabe als ERLEDIGT markieren und ins Archiv verschieben?"
     : "Diese Aufgabe zurück in To-Do holen (wieder OFFEN)?";
-
   if(!confirm(msg)) return;
 
-  if(goingDone){
-    it.done = true; it.doneAt = new Date().toISOString();
-  } else {
-    it.done = false; it.doneAt = null;
-  }
+  if(goingDone){ it.done = true; it.doneAt = new Date().toISOString(); }
+  else { it.done = false; it.doneAt = null; }
+
   save(db);
-  dlg.close();
-  render();
+  dlg.close(); render();
 });
 
+// Delete (final)
 document.getElementById("deleteTask").addEventListener("click", () => {
   if(!activeId) return;
-
   const typed = (document.getElementById("deleteConfirm").value || "").trim().toUpperCase();
   if(typed !== "LÖSCHEN" && typed !== "LOESCHEN"){
     alert('Zum endgültigen Löschen bitte "LÖSCHEN" (oder "LOESCHEN") eintippen.');
     return;
   }
   if(!confirm("Wirklich ENDGÜLTIG löschen? Das kann nicht rückgängig gemacht werden.")) return;
-
   removeTask(activeId);
   activeId = null;
-  dlg.close();
-  render();
+  dlg.close(); render();
 });
+
+// Image add buttons
+document.getElementById("addImage").addEventListener("click", () => document.getElementById("pickImage").click());
+document.getElementById("addPhoto").addEventListener("click", () => document.getElementById("takePhoto").click());
+
+async function handlePickedFiles(fileList){
+  const files = Array.from(fileList || []).filter(f => (f.type||"").startsWith("image/"));
+  if(!files.length) return;
+
+  const it = getActiveItem();
+  if(!it) return;
+
+  for(const f of files){
+    const dataUrl = await fileToCompressedDataUrl(f, 1280, 0.8);
+    it.images.push({
+      id: crypto.randomUUID(),
+      name: f.name || "Foto",
+      addedAt: new Date().toISOString(),
+      dataUrl
+    });
+  }
+  updateTask(it.id, { images: it.images, notes: document.getElementById("dlgNotes").value });
+  renderGallery(getActiveItem());
+  render();
+}
+
+document.getElementById("pickImage").addEventListener("change", (e) => handlePickedFiles(e.target.files));
+document.getElementById("takePhoto").addEventListener("change", (e) => handlePickedFiles(e.target.files));
 
 // Backup export/import
 document.getElementById("exportBtn").addEventListener("click", () => {
   const db = load();
-  const payload = { exportedAt:new Date().toISOString(), app:"peter_note", version:1, data:db };
+  const payload = { exportedAt:new Date().toISOString(), app:"peter_note", version:2, data:db };
   const blob = new Blob([JSON.stringify(payload, null, 2)], {type:"application/json"});
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -376,14 +539,15 @@ document.getElementById("importFile").addEventListener("change", async (e) => {
 
   db.view = db.view || "todo";
   db.q = db.q || "";
-  db.items = db.items.map(it => ({
+  db.items = db.items.map(it => normalizeItem({
     id: it.id || crypto.randomUUID(),
     titleRaw: it.titleRaw || it.title || "",
     createdAt: it.createdAt || new Date().toISOString(),
     createdLabel: it.createdLabel || fmtDate(new Date(it.createdAt || Date.now())),
     done: !!it.done,
     doneAt: it.doneAt || null,
-    notes: it.notes || ""
+    notes: it.notes || "",
+    images: Array.isArray(it.images) ? it.images : []
   }));
 
   localStorage.setItem(LS_KEY, JSON.stringify(db));
